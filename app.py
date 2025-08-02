@@ -1,12 +1,12 @@
 import os
 import json
 import asyncio
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, TypedDict, NotRequired
+from dotenv import load_dotenv
 
 from langgraph.graph import StateGraph, END
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import SystemMessage, HumanMessage
-from pydantic import BaseModel, Field
 
 from tools import (
     web_search,
@@ -24,33 +24,88 @@ from tools import (
 from utils import parse_gaia_question
 
 
-class AgentState(BaseModel):
-    """Pydantic model for GAIA agent state management"""
+class AgentState(TypedDict):
+    """TypedDict for GAIA agent state management"""
 
-    messages: List[Any] = Field(
-        default_factory=list, description="List of conversation messages"
-    )
-    task_id: str = Field(..., description="Unique identifier for the task")
-    original_question: str = Field(
-        ..., description="The original question to be answered"
-    )
-    plan: Optional[str] = Field(None, description="Agent's execution plan")
-    tool_results: List[str] = Field(
-        default_factory=list, description="Results from tool executions"
-    )
-    reasoning_trace: List[str] = Field(
-        default_factory=list, description="Step-by-step reasoning trace"
-    )
-    needs_tools: bool = Field(False, description="Whether the agent needs to use tools")
-    final_answer: Optional[str] = Field(
-        None, description="The final answer to the question"
-    )
+    # Required fields
+    task_id: str  # Unique identifier for the task
+    original_question: str  # The original question to be answered
 
-    class Config:
-        """Pydantic configuration"""
+    # Optional fields with NotRequired
+    messages: NotRequired[List[Any]]  # List of conversation messages
+    plan: NotRequired[Optional[str]]  # Agent's execution plan
+    tool_results: NotRequired[List[str]]  # Results from tool executions
+    reasoning_trace: NotRequired[List[str]]  # Step-by-step reasoning trace
+    needs_tools: NotRequired[bool]  # Whether the agent needs to use tools
+    final_answer: NotRequired[Optional[str]]  # The final answer to the question
 
-        arbitrary_types_allowed = True  # Allow LangChain message types
-        extra = "forbid"  # Prevent extra fields
+
+def create_agent_state(task_id: str, original_question: str) -> AgentState:
+    """Factory function to create initial AgentState with default values."""
+    if not task_id:
+        raise ValueError("task_id is required")
+    if not original_question:
+        raise ValueError("original_question is required")
+
+    state: AgentState = {
+        "task_id": task_id,
+        "original_question": original_question,
+        "messages": [],
+        "plan": None,
+        "tool_results": [],
+        "reasoning_trace": [],
+        "needs_tools": False,
+        "final_answer": None,
+    }
+
+    return state
+
+
+def validate_agent_state(state: AgentState) -> None:
+    """Validate AgentState manually (replaces Pydantic validation)."""
+    required_fields = ["task_id", "original_question"]
+
+    for field in required_fields:
+        if field not in state:
+            raise ValueError(f"Missing required field: {field}")
+
+    # Type validation
+    if not isinstance(state["task_id"], str):
+        raise TypeError("task_id must be a string")
+    if not isinstance(state["original_question"], str):
+        raise TypeError("original_question must be a string")
+
+    # Optional field validation
+    if "messages" in state and not isinstance(state["messages"], list):
+        raise TypeError("messages must be a list")
+    if "tool_results" in state and not isinstance(state["tool_results"], list):
+        raise TypeError("tool_results must be a list")
+    if "reasoning_trace" in state and not isinstance(state["reasoning_trace"], list):
+        raise TypeError("reasoning_trace must be a list")
+    if "needs_tools" in state and not isinstance(state["needs_tools"], bool):
+        raise TypeError("needs_tools must be a boolean")
+
+
+def ensure_state_defaults(state: AgentState) -> AgentState:
+    """Ensure all optional fields have default values."""
+    defaults = {
+        "messages": [],
+        "plan": None,
+        "tool_results": [],
+        "reasoning_trace": [],
+        "needs_tools": False,
+        "final_answer": None,
+    }
+
+    for key, default_value in defaults.items():
+        if key not in state:
+            state[key] = (
+                default_value.copy()
+                if isinstance(default_value, list)
+                else default_value
+            )
+
+    return state
 
 
 class GAIAAgent:
@@ -105,8 +160,11 @@ class GAIAAgent:
     async def _planning_node(self, state: AgentState) -> AgentState:
         """Analyze the task and create an execution plan"""
 
+        # Ensure state has default values
+        state = ensure_state_defaults(state)
+
         # Get GAIA question analysis
-        question_analysis = parse_gaia_question(state.original_question)
+        question_analysis = parse_gaia_question(state["original_question"])
 
         # Build tool descriptions
         tool_descriptions = []
@@ -123,7 +181,7 @@ Question Analysis and available tools will be provided. Your job is to:
 
 Provide a clear, actionable plan that will lead to a precise answer."""
 
-        user_prompt = f"""Task: {state.original_question}
+        user_prompt = f"""Task: {state["original_question"]}
 
 Question Analysis:
 - Recommended tools: {question_analysis['recommended_tools']}
@@ -163,14 +221,17 @@ Create a detailed execution plan for this task."""
             ]
         )
 
-        state.plan = response.content
-        state.needs_tools = needs_tools
-        state.reasoning_trace.append(f"Planning: {response.content}")
+        state["plan"] = response.content
+        state["needs_tools"] = needs_tools
+        state["reasoning_trace"].append(f"Planning: {response.content}")
 
         return state
 
     async def _tool_execution_node(self, state: AgentState) -> AgentState:
         """Execute necessary tools based on the plan"""
+
+        # Ensure state has default values
+        state = ensure_state_defaults(state)
 
         # Build tool information for the prompt
         tool_info = []
@@ -196,11 +257,11 @@ TOOL: data_processor
 ARGS: 1,2,3,4,5
 OPERATION: sum"""
 
-        user_prompt = f"""Based on this plan: {state.plan}
+        user_prompt = f"""Based on this plan: {state["plan"]}
 
-Original question: {state.original_question}
+Original question: {state["original_question"]}
 
-Previous tool results: {state.tool_results}
+Previous tool results: {state["tool_results"]}
 
 Available tools:
 {chr(10).join(tool_info)}
@@ -291,25 +352,28 @@ What specific tool should be used next and with what parameters?"""
                         else:
                             result = "Tool execution method not implemented"
 
-                        state.tool_results.append(f"{tool_name}({args}): {result}")
+                        state["tool_results"].append(f"{tool_name}({args}): {result}")
 
                     except Exception as tool_error:
                         error_msg = (
                             f"Tool {tool_name} execution error: {str(tool_error)}"
                         )
-                        state.tool_results.append(error_msg)
+                        state["tool_results"].append(error_msg)
                         print(f"Debug - {error_msg}")  # Debug output
                 else:
-                    state.tool_results.append(f"Unknown tool: {tool_name}")
+                    state["tool_results"].append(f"Unknown tool: {tool_name}")
 
             except Exception as e:
-                state.tool_results.append(f"Tool execution error: {str(e)}")
+                state["tool_results"].append(f"Tool execution error: {str(e)}")
 
-        state.reasoning_trace.append(f"Tool execution: {tool_response}")
+        state["reasoning_trace"].append(f"Tool execution: {tool_response}")
         return state
 
     async def _reasoning_node(self, state: AgentState) -> AgentState:
         """Process information and reason about the answer"""
+
+        # Ensure state has default values
+        state = ensure_state_defaults(state)
 
         system_prompt = """You are a reasoning agent. Based on the plan and tool results, reason through the problem step by step.
 
@@ -323,11 +387,11 @@ End your response with either:
 - "NEED_MORE_TOOLS: [explanation]" if you need additional information
 - "READY_FOR_ANSWER: [your reasoning and conclusion]" """
 
-        user_prompt = f"""You are solving this task: {state.original_question}
+        user_prompt = f"""You are solving this task: {state["original_question"]}
 
-Plan: {state.plan}
+Plan: {state["plan"]}
 
-Tool results: {state.tool_results}
+Tool results: {state["tool_results"]}
 
 Based on all available information, reason through the problem step by step."""
 
@@ -338,16 +402,16 @@ Based on all available information, reason through the problem step by step."""
         response = await self.llm.ainvoke(messages)
 
         reasoning_content = response.content
-        state.reasoning_trace.append(f"Reasoning: {reasoning_content}")
+        state["reasoning_trace"].append(f"Reasoning: {reasoning_content}")
 
         # Determine if more tools are needed
         if "NEED_MORE_TOOLS" in reasoning_content:
-            state.needs_tools = True
+            state["needs_tools"] = True
         else:
-            state.needs_tools = False
+            state["needs_tools"] = False
             # Extract the reasoning for final answer formatting
             if "READY_FOR_ANSWER:" in reasoning_content:
-                state.final_answer = reasoning_content.split("READY_FOR_ANSWER:")[
+                state["final_answer"] = reasoning_content.split("READY_FOR_ANSWER:")[
                     1
                 ].strip()
 
@@ -355,6 +419,9 @@ Based on all available information, reason through the problem step by step."""
 
     async def _answer_formatter_node(self, state: AgentState) -> AgentState:
         """Format the final answer according to GAIA requirements"""
+
+        # Ensure state has default values
+        state = ensure_state_defaults(state)
 
         system_prompt = """You are an answer formatter for the GAIA benchmark. You must provide ONLY the final answer in the exact format required:
 
@@ -369,9 +436,9 @@ Examples:
 
 Provide ONLY the answer, nothing else."""
 
-        user_prompt = f"""Original question: {state.original_question}
+        user_prompt = f"""Original question: {state["original_question"]}
 
-Reasoning and conclusion: {state.final_answer or state.reasoning_trace[-1]}
+Reasoning and conclusion: {state["final_answer"] or state["reasoning_trace"][-1]}
 
 Provide the final answer in GAIA format:"""
 
@@ -388,30 +455,33 @@ Provide the final answer in GAIA format:"""
         if "FINAL ANSWER:" in final_answer:
             final_answer = final_answer.split("FINAL ANSWER:")[-1].strip()
 
-        state.final_answer = final_answer
+        state["final_answer"] = final_answer
         return state
 
     def _should_use_tools(self, state: AgentState) -> str:
         """Determine if tools should be used"""
-        return "use_tools" if state.needs_tools else "skip_tools"
+        return "use_tools" if state.get("needs_tools", False) else "skip_tools"
 
     def _needs_more_tools(self, state: AgentState) -> str:
         """Determine if more tools are needed"""
-        return "more_tools" if state.needs_tools else "finalize"
+        return "more_tools" if state.get("needs_tools", False) else "finalize"
 
     async def process_task(self, task_id: str, question: str) -> Dict[str, Any]:
         """Process a single GAIA task"""
 
-        initial_state = AgentState(task_id=task_id, original_question=question)
+        initial_state = create_agent_state(task_id, question)
 
         try:
+            # Validate the initial state
+            validate_agent_state(initial_state)
+
             # Run the graph
             final_state = await self.graph.ainvoke(initial_state)
 
             return {
                 "task_id": task_id,
-                "model_answer": final_state.final_answer,
-                "reasoning_trace": " -> ".join(final_state.reasoning_trace),
+                "model_answer": final_state.get("final_answer"),
+                "reasoning_trace": " -> ".join(final_state.get("reasoning_trace", [])),
             }
 
         except Exception as e:
@@ -426,6 +496,7 @@ async def main():
     """Main execution function"""
 
     # Initialize agent
+    load_dotenv()
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
         raise ValueError("ANTHROPIC_API_KEY environment variable not set")
