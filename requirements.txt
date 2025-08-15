@@ -1,0 +1,49 @@
+anthropic  # Claude API client
+langgraph  # Workflow orchestration
+aiohttp  # Async HTTP client
+aiofiles  # Async file operations
+
+# Image Processing
+Pillow  # PIL image processing
+opencv-python  # Computer vision
+numpy  # Numerical processing
+
+# OCR Engines (for image text extraction)
+pytesseract  # Tesseract OCR wrapper
+easyocr  # Easy OCR engine
+
+# Audio Processing
+librosa  # Audio analysis
+soundfile  # Audio file I/O
+scipy  # Scientific computing
+
+# Audio Transcription (Optional but recommended)
+openai-whisper  # OpenAI Whisper for transcription
+SpeechRecognition  # Speech recognition library
+
+# Web Research
+beautifulsoup4  # HTML parsing
+requests  # HTTP requests
+
+# Machine Learning (for advanced analysis)
+scikit-learn  # Machine learning utilities
+
+# Testing
+pytest  # Testing framework
+pytest-asyncio  # Async testing support
+
+# System Monitoring
+psutil  # System resource monitoring
+
+# Environment Management
+python-dotenv  # Environment variable loading
+
+# Development Tools
+black  # Code formatting
+flake8
+mypy
+
+# Youtube downloader
+yt-dlp
+ffmpeg-python
+imageio-ffmpeg
